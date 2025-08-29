@@ -1,0 +1,49 @@
+[package]
+name = "rust-coding-agent"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "agent"
+path = "src/main.rs"
+
+[dependencies]
+# HTTP client for Groq API
+reqwest = { version = "0.11", features = ["json"] }
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+# JSON handling
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# CLI and terminal interface
+clap = { version = "4.0", features = ["derive"] }
+crossterm = "0.27"
+# TUI framework
+ratatui = "0.28"
+# Text input widget for TUI
+tui-textarea = "0.6"
+# Tree view for file explorer
+tui-tree-widget = "0.22"
+# Syntax highlighting
+syntect = "5.2"
+# File watching
+notify = "6.1"
+# Clipboard access
+arboard = "3.2"
+# Image processing
+image = "0.24"
+# Base64 encoding for images
+base64 = "0.21"
+# Configuration
+dirs = "5.0"
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+# Terminal styling
+console = "0.15"
+# UUID for unique identifiers
+uuid = { version = "1.0", features = ["v4"] }
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+# Regular expressions
+regex = "1.10"
