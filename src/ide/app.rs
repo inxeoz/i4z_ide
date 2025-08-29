@@ -89,6 +89,11 @@ pub struct IdeApp {
     pub last_click_position: Option<(u16, u16)>,
     pub notifications: Vec<NotificationMessage>,
     pub show_notifications: bool,
+
+    // Tab drag state
+    pub is_dragging_tab: bool,
+    pub dragged_tab_index: Option<usize>,
+    pub drag_start_x: u16,
     
     // Session
     pub session_id: Uuid,
@@ -135,6 +140,9 @@ impl IdeApp {
             last_click_position: None,
             notifications: Vec::new(),
             show_notifications: false,
+            is_dragging_tab: false,
+            dragged_tab_index: None,
+            drag_start_x: 0,
             session_id,
             current_directory,
         })
@@ -307,6 +315,64 @@ impl IdeApp {
     fn get_file_item_index(&self, target_path: &std::path::Path) -> Option<usize> {
         let flat_list = self.sidebar.file_explorer.root.get_flat_list();
         flat_list.iter().position(|node| node.path == target_path)
+    }
+
+    fn is_click_in_tab_area(&self, x: u16, y: u16) -> bool {
+        if !self.editor.has_open_files() {
+            return false;
+        }
+
+        // Tab area is in the main editor area (after sidebar)
+        let main_area_start_x = self.layout.sidebar_width;
+
+        // Be more flexible with Y coordinates - tabs could be at various Y positions
+        let result = x >= main_area_start_x && y >= 1 && y <= 10; // Allow a wider range
+        result
+    }
+
+    fn get_tab_click_info(&self, x: u16, y: u16) -> Option<(usize, bool)> {
+        use crate::ide::layout;
+        use ratatui::layout::Rect;
+
+        if !self.is_click_in_tab_area(x, y) {
+            return None;
+        }
+
+        // Create a rect representing the tab area
+        // Use a flexible area that covers the likely tab positions
+        let tab_area = Rect::new(self.layout.sidebar_width, y.saturating_sub(2), 200, 5);
+        layout::get_tab_click_info(self, x, y, tab_area)
+    }
+
+    fn get_tab_index_from_x(&self, x: u16) -> Option<usize> {
+        let tabs = self.editor.get_tab_info();
+        if tabs.is_empty() {
+            return None;
+        }
+
+        let mut current_x = self.layout.sidebar_width;
+        for (i, tab) in tabs.iter().enumerate() {
+            let is_modified = tab.is_modified;
+            let modified_indicator = if is_modified { "●" } else { "" };
+            let close_button = " ✕";
+            let tab_text = format!(" {} {}{}{} ",
+                crate::ide::layout::get_file_icon(&tab.file_name),
+                tab.file_name,
+                modified_indicator,
+                close_button
+            );
+
+            let tab_width = tab_text.len() as u16;
+            let tab_end_x = current_x + tab_width;
+
+            if x >= current_x && x < tab_end_x {
+                return Some(i);
+            }
+
+            current_x = tab_end_x + 1; // +1 for separator "│"
+        }
+
+        None
     }
 
     fn is_folder_expanded(&self, target_path: &std::path::Path) -> bool {
@@ -613,76 +679,144 @@ impl IdeApp {
             // Mouse events
             IdeEvent::MouseMove(x, y) => {
                 self.update_mouse_position(x, y);
+
+                // Handle tab dragging - start dragging if mouse moved enough from click position
+                if !self.is_dragging_tab && self.dragged_tab_index.is_some() {
+                    let drag_threshold = 3; // Minimum pixels to start dragging
+                    if (x as i16 - self.drag_start_x as i16).abs() > drag_threshold {
+                        self.is_dragging_tab = true;
+                        self.add_notification("Started tab drag".to_string(), NotificationType::FileOperation);
+                    }
+                }
+
+                // Handle active tab dragging
+                if self.is_dragging_tab && self.dragged_tab_index.is_some() {
+                    // Calculate target tab position based on mouse x coordinate
+                    if let Some(target_index) = self.get_tab_index_from_x(x) {
+                        let dragged_index = self.dragged_tab_index.unwrap();
+                        if target_index != dragged_index {
+                            self.editor.reorder_tabs(dragged_index, target_index);
+                            self.dragged_tab_index = Some(target_index);
+                        }
+                    }
+                }
+            }
+
+            IdeEvent::MouseRelease(x, y) => {
+                // End tab dragging
+                if self.is_dragging_tab {
+                    self.is_dragging_tab = false;
+                    self.dragged_tab_index = None;
+                    self.add_notification("Tab drag completed".to_string(), NotificationType::FileOperation);
+                } else if self.dragged_tab_index.is_some() {
+                    // Just a click, not a drag - reset the drag state
+                    self.dragged_tab_index = None;
+                }
             }
             
             IdeEvent::MouseClick(x, y) => {
                 self.last_click_position = Some((x, y));
-                let context = self.get_mouse_context(x, y);
-                self.add_notification(
-                    format!("🖱️ Clicked at ({}, {}) in {}", x, y, context),
-                    NotificationType::MouseClick
-                );
-                
-                // Handle file explorer clicks specifically
-                if context == "File Explorer" {
-                    if let Some((path, is_dir)) = self.get_clicked_file_item(x, y) {
-                        let file_name = path.file_name()
-                            .and_then(|name| name.to_str())
-                            .unwrap_or("Unknown")
-                            .to_string();
-                            
-                        if is_dir {
-                            // Toggle folder expand/collapse
-                            if let Some(selected_index) = self.get_file_item_index(&path) {
-                                // Update selection to clicked item
-                                self.sidebar.file_explorer.list_state.select(Some(selected_index));
-                                // Toggle the folder
-                                self.sidebar.file_explorer.toggle_expand();
-                                
-                                // Check if folder is now expanded or collapsed
-                                let is_expanded = self.is_folder_expanded(&path);
-                                let action = if is_expanded { "expanded" } else { "collapsed" };
+
+                // Reset any pending drag state
+                self.is_dragging_tab = false;
+                self.dragged_tab_index = None;
+
+                // First check if click is in tab area
+                if self.is_click_in_tab_area(x, y) {
+                    self.add_notification(format!("Tab area click detected at ({}, {})", x, y), NotificationType::MouseClick);
+                    if let Some((tab_index, is_close_button)) = self.get_tab_click_info(x, y) {
+                        if is_close_button && tab_index != usize::MAX {
+                            // Close the tab
+                            if let Some(tab_id) = self.editor.get_tab_id_at_index(tab_index) {
+                                self.editor.close_tab_by_id(tab_id);
                                 self.add_notification(
-                                    format!("📁 Folder '{}' {}", file_name, action),
+                                    format!("Closed tab {}", tab_index + 1),
                                     NotificationType::FileOperation
                                 );
                             }
+                        } else if tab_index == usize::MAX {
+                            // New tab button clicked
+                            self.editor.new_file();
+                            self.focus_panel(FocusedPanel::Editor);
+                            self.add_notification("New tab created".to_string(), NotificationType::FileOperation);
                         } else {
-                            // Open file in editor
-                            if let Err(e) = self.editor.open_file(path.clone()) {
-                                self.add_notification(
-                                    format!("❌ Failed to open file '{}': {}", file_name, e),
-                                    NotificationType::FileOperation
-                                );
-                            } else {
-                                self.add_notification(
-                                    format!("📄 File '{}' opened", file_name),
-                                    NotificationType::FileOperation
-                                );
-                                self.focus_panel(FocusedPanel::Editor);
-                            }
+                            // Switch to the tab immediately on click
+                            self.editor.switch_to_tab(tab_index);
+                            self.focus_panel(FocusedPanel::Editor);
+
+                            // Prepare for potential drag operation
+                            self.dragged_tab_index = Some(tab_index);
+                            self.drag_start_x = x;
                         }
-                    } else {
-                        // Click in file explorer area but not on a specific item
-                        self.focus_panel(FocusedPanel::FileExplorer);
-                        self.add_notification("Focused File Explorer".to_string(), NotificationType::Info);
                     }
                 } else {
-                    // Handle other area clicks (focus changes)
-                    match context.as_str() {
-                        "AI Chat" => {
-                            self.focus_panel(FocusedPanel::Chat);
-                            self.add_notification("Focused AI Chat".to_string(), NotificationType::Info);
+                    let context = self.get_mouse_context(x, y);
+                    self.add_notification(
+                        format!("🖱️ Clicked at ({}, {}) in {}", x, y, context),
+                        NotificationType::MouseClick
+                    );
+
+                    // Handle file explorer clicks specifically
+                    if context == "File Explorer" {
+                        if let Some((path, is_dir)) = self.get_clicked_file_item(x, y) {
+                            let file_name = path.file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("Unknown")
+                                .to_string();
+
+                            if is_dir {
+                                // Toggle folder expand/collapse
+                                if let Some(selected_index) = self.get_file_item_index(&path) {
+                                    // Update selection to clicked item
+                                    self.sidebar.file_explorer.list_state.select(Some(selected_index));
+                                    // Toggle the folder
+                                    self.sidebar.file_explorer.toggle_expand();
+
+                                    // Check if folder is now expanded or collapsed
+                                    let is_expanded = self.is_folder_expanded(&path);
+                                    let action = if is_expanded { "expanded" } else { "collapsed" };
+                                    self.add_notification(
+                                        format!("📁 Folder '{}' {}", file_name, action),
+                                        NotificationType::FileOperation
+                                    );
+                                }
+                            } else {
+                                // Open file in editor
+                                if let Err(e) = self.editor.open_file(path.clone()) {
+                                    self.add_notification(
+                                        format!("❌ Failed to open file '{}': {}", file_name, e),
+                                        NotificationType::FileOperation
+                                    );
+                                } else {
+                                    self.add_notification(
+                                        format!("📄 File '{}' opened", file_name),
+                                        NotificationType::FileOperation
+                                    );
+                                    self.focus_panel(FocusedPanel::Editor);
+                                }
+                            }
+                        } else {
+                            // Click in file explorer area but not on a specific item
+                            self.focus_panel(FocusedPanel::FileExplorer);
+                            self.add_notification("Focused File Explorer".to_string(), NotificationType::Info);
                         }
-                        "Editor" => {
-                            self.focus_panel(FocusedPanel::Editor);
-                            self.add_notification("Focused Editor".to_string(), NotificationType::Info);
+                    } else {
+                        // Handle other area clicks (focus changes)
+                        match context.as_str() {
+                            "AI Chat" => {
+                                self.focus_panel(FocusedPanel::Chat);
+                                self.add_notification("Focused AI Chat".to_string(), NotificationType::Info);
+                            }
+                            "Editor" => {
+                                self.focus_panel(FocusedPanel::Editor);
+                                self.add_notification("Focused Editor".to_string(), NotificationType::Info);
+                            }
+                            "Notifications" => {
+                                // Notifications panel clicked - maybe add scroll functionality later
+                                self.add_notification("Clicked in notifications area".to_string(), NotificationType::Info);
+                            }
+                            _ => {}
                         }
-                        "Notifications" => {
-                            // Notifications panel clicked - maybe add scroll functionality later
-                            self.add_notification("Clicked in notifications area".to_string(), NotificationType::Info);
-                        }
-                        _ => {}
                     }
                 }
             }
@@ -743,6 +877,65 @@ impl IdeApp {
             IdeEvent::ToggleFileExpand => {
                 if self.focused_panel == FocusedPanel::FileExplorer {
                     self.sidebar.file_explorer.toggle_expand();
+                }
+            }
+
+            // Tab management events
+            IdeEvent::CloseTab(tab_id) => {
+                self.editor.close_tab_by_id(tab_id);
+                self.add_notification("Tab closed".to_string(), NotificationType::FileOperation);
+            }
+
+            IdeEvent::SwitchToTab(index) => {
+                self.editor.switch_to_tab(index);
+                self.focus_panel(FocusedPanel::Editor);
+                self.add_notification(
+                    format!("Switched to tab {}", index + 1),
+                    NotificationType::FileOperation
+                );
+            }
+
+            IdeEvent::NextTab => {
+                self.editor.switch_to_next_tab();
+                self.focus_panel(FocusedPanel::Editor);
+                self.add_notification("Next tab".to_string(), NotificationType::FileOperation);
+            }
+
+            IdeEvent::PreviousTab => {
+                self.editor.switch_to_previous_tab();
+                self.focus_panel(FocusedPanel::Editor);
+                self.add_notification("Previous tab".to_string(), NotificationType::FileOperation);
+            }
+
+            IdeEvent::ReorderTab { from_index, to_index } => {
+                self.editor.reorder_tabs(from_index, to_index);
+                self.add_notification(
+                    format!("Moved tab from {} to {}", from_index + 1, to_index + 1),
+                    NotificationType::FileOperation
+                );
+            }
+
+            IdeEvent::StartTabDrag(index) => {
+                self.is_dragging_tab = true;
+                self.dragged_tab_index = Some(index);
+                self.drag_start_x = 0; // Will be set on mouse move
+            }
+
+            IdeEvent::EndTabDrag => {
+                self.is_dragging_tab = false;
+                self.dragged_tab_index = None;
+            }
+
+            IdeEvent::UpdateTabDrag(x) => {
+                // Handle drag position updates
+                if self.is_dragging_tab && self.dragged_tab_index.is_some() {
+                    if let Some(target_index) = self.get_tab_index_from_x(x) {
+                        let dragged_index = self.dragged_tab_index.unwrap();
+                        if target_index != dragged_index {
+                            self.editor.reorder_tabs(dragged_index, target_index);
+                            self.dragged_tab_index = Some(target_index);
+                        }
+                    }
                 }
             }
         }

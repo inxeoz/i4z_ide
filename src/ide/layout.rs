@@ -144,17 +144,31 @@ fn draw_editor_area(frame: &mut Frame, app: &mut IdeApp, area: Rect) {
 fn draw_tabs(frame: &mut Frame, app: &IdeApp, area: Rect) {
     let tabs = app.editor.get_tab_info();
     let active_tab = app.editor.get_active_tab_index();
-    
+
     if tabs.is_empty() {
         return;
     }
 
     let mut tab_spans = Vec::new();
-    
+    let mouse_x = app.mouse_position.0;
+    let mouse_y = app.mouse_position.1;
+    let tab_area_y = area.y;
+
+    // Check if mouse is hovering over tab area
+    let is_hovering_tabs = mouse_y == tab_area_y && mouse_x >= area.x && mouse_x < area.x + area.width;
+
     for (i, tab) in tabs.iter().enumerate() {
         let is_active = i == active_tab;
         let is_modified = tab.is_modified;
-        
+
+        // Calculate tab position for mouse interaction
+        let tab_start_x = area.x + tab_spans.iter().map(|span: &Span| span.content.len() as u16).sum::<u16>();
+        let tab_width = (get_file_icon(&tab.file_name).len() + tab.file_name.len() + 4) as u16; // icon + space + name + space + modified indicator + close button
+        let tab_end_x = tab_start_x + tab_width;
+
+        // Check if mouse is hovering over this specific tab
+        let is_hovering_this_tab = is_hovering_tabs && mouse_x >= tab_start_x && mouse_x < tab_end_x;
+
         // Tab styling
         let (bg_color, fg_color) = if is_active {
             if app.focused_panel == FocusedPanel::Editor {
@@ -162,6 +176,8 @@ fn draw_tabs(frame: &mut Frame, app: &IdeApp, area: Rect) {
             } else {
                 (Color::Blue, Color::White)
             }
+        } else if is_hovering_this_tab {
+            (Color::Gray, Color::White)
         } else {
             (Color::DarkGray, Color::Gray)
         };
@@ -171,16 +187,18 @@ fn draw_tabs(frame: &mut Frame, app: &IdeApp, area: Rect) {
             style = style.add_modifier(Modifier::BOLD);
         }
 
-        // Tab content
+        // Tab content with close button
         let modified_indicator = if is_modified { "●" } else { "" };
-        let tab_text = format!(" {} {}{} ", 
-            get_file_icon(&tab.file_name), 
+        let close_button = if is_hovering_this_tab { " ✕" } else { "" };
+        let tab_text = format!(" {} {}{}{} ",
+            get_file_icon(&tab.file_name),
             tab.file_name,
-            modified_indicator
+            modified_indicator,
+            close_button
         );
 
         tab_spans.push(Span::styled(tab_text, style));
-        
+
         // Tab separator
         if i < tabs.len() - 1 {
             tab_spans.push(Span::raw("│"));
@@ -372,7 +390,7 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
     frame.render_widget(help_paragraph, help_area);
 }
 
-fn get_file_icon(filename: &str) -> &'static str {
+pub fn get_file_icon(filename: &str) -> &'static str {
     let extension = std::path::Path::new(filename)
         .extension()
         .and_then(|ext| ext.to_str())
@@ -390,6 +408,57 @@ fn get_file_icon(filename: &str) -> &'static str {
         "toml" | "yaml" | "yml" => "⚙️",
         _ => "📄",
     }
+}
+
+pub fn get_tab_click_info(app: &crate::ide::app::IdeApp, x: u16, y: u16, area: Rect) -> Option<(usize, bool)> {
+    let tabs = app.editor.get_tab_info();
+    if tabs.is_empty() {
+        return None;
+    }
+
+    let tab_area_y = area.y;
+    // Allow clicks within the tab area
+    if y < tab_area_y || y >= tab_area_y + area.height {
+        return None;
+    }
+
+    let mut current_x = area.x;
+    for (i, tab) in tabs.iter().enumerate() {
+        let is_active = i == app.editor.get_active_tab_index();
+        let is_modified = tab.is_modified;
+
+        // Calculate tab content (same as in draw_tabs)
+        let modified_indicator = if is_modified { "●" } else { "" };
+        let close_button = " ✕"; // Always include close button in width calculation
+        let tab_text = format!(" {} {}{}{} ",
+            get_file_icon(&tab.file_name),
+            tab.file_name,
+            modified_indicator,
+            close_button
+        );
+
+        let tab_width = tab_text.len() as u16;
+        let tab_end_x = current_x + tab_width;
+
+        if x >= current_x && x < tab_end_x {
+            // Check if click is on close button (last few characters)
+            let close_button_start = tab_end_x - close_button.len() as u16;
+            let is_close_button = x >= close_button_start;
+            return Some((i, is_close_button));
+        }
+
+        current_x = tab_end_x + 1; // +1 for separator "│"
+    }
+
+    // Check for new tab button
+    let new_tab_text = " + ";
+    let new_tab_start = current_x;
+    let new_tab_end = new_tab_start + new_tab_text.len() as u16;
+    if x >= new_tab_start && x < new_tab_end {
+        return Some((usize::MAX, false)); // Special value for new tab
+    }
+
+    None
 }
 
 /// Create a centered rectangle with the given percentage of width and height

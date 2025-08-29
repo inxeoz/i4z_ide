@@ -65,7 +65,18 @@ pub enum IdeEvent {
     // Mouse events
     MouseClick(u16, u16),
     MouseMove(u16, u16),
+    MouseRelease(u16, u16),
     MouseScroll(i8),
+
+    // Tab management events
+    CloseTab(u32), // Close tab by ID
+    SwitchToTab(usize), // Switch to tab by index
+    NextTab,
+    PreviousTab,
+    ReorderTab { from_index: usize, to_index: usize },
+    StartTabDrag(usize), // Start dragging tab at index
+    EndTabDrag, // End tab dragging
+    UpdateTabDrag(u16), // Update drag position
 }
 
 pub struct EventHandler {
@@ -94,9 +105,19 @@ impl EventHandler {
 
     fn handle_key_event(&self, key: KeyEvent) -> Option<IdeEvent> {
         match key.modifiers {
+            m if m.contains(KeyModifiers::CONTROL) && m.contains(KeyModifiers::SHIFT) => {
+                self.handle_ctrl_shift_key(key.code)
+            }
             KeyModifiers::CONTROL => self.handle_ctrl_key(key.code),
             KeyModifiers::ALT => self.handle_alt_key(key.code),
             _ => self.handle_normal_key(key),
+        }
+    }
+
+    fn handle_ctrl_shift_key(&self, key_code: KeyCode) -> Option<IdeEvent> {
+        match key_code {
+            KeyCode::Tab => Some(IdeEvent::PreviousTab),
+            _ => None,
         }
     }
 
@@ -131,7 +152,11 @@ impl EventHandler {
             
             // File tree
             KeyCode::Char('r') => Some(IdeEvent::RefreshFileTree),
-            
+
+            // Tab management
+            KeyCode::Tab => Some(IdeEvent::NextTab),
+            KeyCode::Char('t') => Some(IdeEvent::NewFile), // Ctrl+T for new tab
+
             _ => None,
         }
     }
@@ -184,6 +209,9 @@ impl EventHandler {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 Some(IdeEvent::MouseClick(mouse.column, mouse.row))
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                Some(IdeEvent::MouseRelease(mouse.column, mouse.row))
             }
             MouseEventKind::Moved => {
                 Some(IdeEvent::MouseMove(mouse.column, mouse.row))

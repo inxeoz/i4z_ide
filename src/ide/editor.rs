@@ -19,10 +19,17 @@ pub struct EditorTab {
     pub cursor_col: usize,
     pub scroll_offset: usize,
     pub is_modified: bool,
+    pub id: u32, // Unique identifier for tab management
 }
 
 impl EditorTab {
     pub fn new() -> Self {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u32;
+
         Self {
             file_path: None,
             file_name: "Untitled".to_string(),
@@ -32,6 +39,7 @@ impl EditorTab {
             cursor_col: 0,
             scroll_offset: 0,
             is_modified: false,
+            id,
         }
     }
 
@@ -48,6 +56,12 @@ impl EditorTab {
             .unwrap_or("Unknown")
             .to_string();
 
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u32;
+
         Ok(Self {
             file_path: Some(path),
             file_name,
@@ -57,6 +71,7 @@ impl EditorTab {
             cursor_col: 0,
             scroll_offset: 0,
             is_modified: false,
+            id,
         })
     }
 
@@ -224,6 +239,74 @@ impl Editor {
             if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
                 self.active_tab = self.tabs.len() - 1;
             }
+        }
+    }
+
+    pub fn close_tab_by_id(&mut self, tab_id: u32) {
+        if let Some(index) = self.tabs.iter().position(|tab| tab.id == tab_id) {
+            self.tabs.remove(index);
+            if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
+                self.active_tab = self.tabs.len() - 1;
+            } else if index <= self.active_tab && self.active_tab > 0 {
+                self.active_tab -= 1;
+            }
+        }
+    }
+
+    pub fn close_tab_by_index(&mut self, index: usize) {
+        if index < self.tabs.len() {
+            self.tabs.remove(index);
+            if self.active_tab >= self.tabs.len() && !self.tabs.is_empty() {
+                self.active_tab = self.tabs.len() - 1;
+            } else if index <= self.active_tab && self.active_tab > 0 {
+                self.active_tab -= 1;
+            }
+        }
+    }
+
+    pub fn reorder_tabs(&mut self, from_index: usize, to_index: usize) {
+        if from_index < self.tabs.len() && to_index < self.tabs.len() && from_index != to_index {
+            let tab = self.tabs.remove(from_index);
+            self.tabs.insert(to_index, tab);
+
+            // Update active tab index if necessary
+            if self.active_tab == from_index {
+                self.active_tab = to_index;
+            } else if from_index < to_index && self.active_tab > from_index && self.active_tab <= to_index {
+                self.active_tab -= 1;
+            } else if from_index > to_index && self.active_tab >= to_index && self.active_tab < from_index {
+                self.active_tab += 1;
+            }
+        }
+    }
+
+    pub fn get_tab_id_at_index(&self, index: usize) -> Option<u32> {
+        self.tabs.get(index).map(|tab| tab.id)
+    }
+
+    pub fn get_tab_index_by_id(&self, tab_id: u32) -> Option<usize> {
+        self.tabs.iter().position(|tab| tab.id == tab_id)
+    }
+
+    pub fn switch_to_next_tab(&mut self) {
+        if !self.tabs.is_empty() {
+            self.active_tab = (self.active_tab + 1) % self.tabs.len();
+        }
+    }
+
+    pub fn switch_to_previous_tab(&mut self) {
+        if !self.tabs.is_empty() {
+            self.active_tab = if self.active_tab == 0 {
+                self.tabs.len() - 1
+            } else {
+                self.active_tab - 1
+            };
+        }
+    }
+
+    pub fn switch_to_tab(&mut self, index: usize) {
+        if index < self.tabs.len() {
+            self.active_tab = index;
         }
     }
 
