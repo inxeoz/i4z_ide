@@ -39,9 +39,11 @@ pub enum FocusedPanel {
 pub struct LayoutState {
     pub sidebar_width: u16,
     pub chat_height: u16,
+    pub notification_height: u16,
     pub min_sidebar_width: u16,
     pub max_sidebar_width: u16,
     pub min_chat_height: u16,
+    pub min_notification_height: u16,
 }
 
 impl Default for LayoutState {
@@ -49,9 +51,11 @@ impl Default for LayoutState {
         Self {
             sidebar_width: 30,
             chat_height: 12,
+            notification_height: 6,
             min_sidebar_width: 20,
             max_sidebar_width: 60,
             min_chat_height: 8,
+            min_notification_height: 4,
         }
     }
 }
@@ -201,6 +205,11 @@ impl IdeApp {
         self.layout.chat_height = (new_height as u16).min(25); // Max 25 lines for chat
     }
 
+    pub fn resize_notifications(&mut self, delta: i16) {
+        let new_height = (self.layout.notification_height as i16 + delta).max(self.layout.min_notification_height as i16);
+        self.layout.notification_height = (new_height as u16).min(15); // Max 15 lines for notifications
+    }
+
     pub fn show_create_file_dialog(&mut self) {
         self.show_create_file_dialog = true;
         self.dialog_input.clear();
@@ -265,24 +274,32 @@ impl IdeApp {
 
     fn get_mouse_context(&self, x: u16, y: u16) -> String {
         if x < self.layout.sidebar_width {
-            // Calculate dynamic areas based on notification visibility
+            // Calculate dynamic areas based on notification visibility with separators
             let file_explorer_end = if self.show_notifications && !self.notifications.is_empty() {
-                // When notifications are shown: file explorer takes less space
+                // When notifications are shown: file explorer, then separator, then notifications, separator, chat
                 let total_sidebar_height = 30; // Approximate terminal height available for sidebar
-                let notifications_height = 6;
+                let notifications_height = self.layout.notification_height;
                 let chat_height = self.layout.chat_height;
-                total_sidebar_height - notifications_height - chat_height
+                let separators_height = 2; // Two separators
+                total_sidebar_height - notifications_height - chat_height - separators_height
             } else {
-                // When no notifications: file explorer takes more space
+                // When no notifications: file explorer, separator, chat
                 let total_sidebar_height = 30;
                 let chat_height = self.layout.chat_height;
-                total_sidebar_height - chat_height
+                let separator_height = 1; // One separator
+                total_sidebar_height - chat_height - separator_height
             };
 
             if y <= file_explorer_end {
                 "File Explorer"
-            } else if self.show_notifications && !self.notifications.is_empty() && y <= file_explorer_end + 6 {
-                "Notifications"
+            } else if self.show_notifications && !self.notifications.is_empty() {
+                let notifications_start = file_explorer_end + 1; // After separator
+                let notifications_end = notifications_start + self.layout.notification_height;
+                if y >= notifications_start && y <= notifications_end {
+                    "Notifications"
+                } else {
+                    "AI Chat"
+                }
             } else {
                 "AI Chat"
             }
@@ -325,8 +342,15 @@ impl IdeApp {
         // Tab area is in the main editor area (after sidebar)
         let main_area_start_x = self.layout.sidebar_width;
 
-        // Be more flexible with Y coordinates - tabs could be at various Y positions
-        let result = x >= main_area_start_x && y >= 1 && y <= 10; // Allow a wider range
+        // Be more flexible with Y coordinates - tabs are typically at the top of the editor area
+        // The tabs are drawn in the first few rows of the editor area
+        let result = x >= main_area_start_x && y >= 1 && y <= 4; // More focused range for tab area
+        
+        // Debug output to help with click detection
+        if x >= main_area_start_x && y >= 1 && y <= 10 {
+            eprintln!("DEBUG: Click at ({}, {}) - main_area_start_x={}, in_tab_area={}", x, y, main_area_start_x, result);
+        }
+        
         result
     }
 
@@ -470,6 +494,8 @@ impl IdeApp {
             IdeEvent::ResizeSidebarShrink => self.resize_sidebar(-2),
             IdeEvent::ResizeChatExpand => self.resize_chat(2),
             IdeEvent::ResizeChatShrink => self.resize_chat(-2),
+            IdeEvent::ResizeNotificationsExpand => self.resize_notifications(2),
+            IdeEvent::ResizeNotificationsShrink => self.resize_notifications(-2),
             
             // File operations
             IdeEvent::OpenFile(path) => {
@@ -725,12 +751,22 @@ impl IdeApp {
                 if self.is_click_in_tab_area(x, y) {
                     self.add_notification(format!("Tab area click detected at ({}, {})", x, y), NotificationType::MouseClick);
                     if let Some((tab_index, is_close_button)) = self.get_tab_click_info(x, y) {
+                        self.add_notification(
+                            format!("Tab click: index={}, is_close={}", tab_index, is_close_button),
+                            NotificationType::MouseClick
+                        );
+                        
                         if is_close_button && tab_index != usize::MAX {
                             // Close the tab
                             if let Some(tab_id) = self.editor.get_tab_id_at_index(tab_index) {
                                 self.editor.close_tab_by_id(tab_id);
                                 self.add_notification(
-                                    format!("Closed tab {}", tab_index + 1),
+                                    format!("✅ Closed tab {} (ID: {})", tab_index + 1, tab_id),
+                                    NotificationType::FileOperation
+                                );
+                            } else {
+                                self.add_notification(
+                                    format!("❌ Failed to get tab ID for index {}", tab_index),
                                     NotificationType::FileOperation
                                 );
                             }
@@ -764,22 +800,23 @@ impl IdeApp {
                                 .unwrap_or("Unknown")
                                 .to_string();
 
+                            // Always update selection to clicked item first
+                            if let Some(selected_index) = self.get_file_item_index(&path) {
+                                self.sidebar.file_explorer.list_state.select(Some(selected_index));
+                                self.focus_panel(FocusedPanel::FileExplorer);
+                            }
+
                             if is_dir {
                                 // Toggle folder expand/collapse
-                                if let Some(selected_index) = self.get_file_item_index(&path) {
-                                    // Update selection to clicked item
-                                    self.sidebar.file_explorer.list_state.select(Some(selected_index));
-                                    // Toggle the folder
-                                    self.sidebar.file_explorer.toggle_expand();
+                                self.sidebar.file_explorer.toggle_expand();
 
-                                    // Check if folder is now expanded or collapsed
-                                    let is_expanded = self.is_folder_expanded(&path);
-                                    let action = if is_expanded { "expanded" } else { "collapsed" };
-                                    self.add_notification(
-                                        format!("📁 Folder '{}' {}", file_name, action),
-                                        NotificationType::FileOperation
-                                    );
-                                }
+                                // Check if folder is now expanded or collapsed
+                                let is_expanded = self.is_folder_expanded(&path);
+                                let action = if is_expanded { "expanded" } else { "collapsed" };
+                                self.add_notification(
+                                    format!("📁 Folder '{}' {}", file_name, action),
+                                    NotificationType::FileOperation
+                                );
                             } else {
                                 // Open file in editor
                                 if let Err(e) = self.editor.open_file(path.clone()) {
@@ -822,16 +859,37 @@ impl IdeApp {
             }
             
             IdeEvent::MouseScroll(delta) => {
-                // TODO: Handle mouse scrolling
-                match self.focused_panel {
-                    FocusedPanel::Editor => {
-                        // Scroll editor content
+                // Handle mouse scrolling based on context
+                let context = self.get_mouse_context(self.mouse_position.0, self.mouse_position.1);
+                match context.as_str() {
+                    "Editor" => {
+                        // Get current tab info for debugging
+                        let tab_info = if let Some(tab) = self.editor.get_current_tab() {
+                            format!("Lines: {}, Scroll: {}", tab.lines.len(), tab.scroll_offset)
+                        } else {
+                            "No tab open".to_string()
+                        };
+
+                        if delta > 0 {
+                            self.editor.scroll_down();
+                            self.add_notification(format!("Scroll down - {}", tab_info), NotificationType::Info);
+                        } else {
+                            self.editor.scroll_up();
+                            self.add_notification(format!("Scroll up - {}", tab_info), NotificationType::Info);
+                        }
                     }
-                    FocusedPanel::Chat => {
+                    "AI Chat" => {
                         if delta > 0 {
                             self.sidebar.chat.scroll_down();
                         } else {
                             self.sidebar.chat.scroll_up();
+                        }
+                    }
+                    "File Explorer" => {
+                        if delta > 0 {
+                            self.sidebar.file_explorer.navigate_down();
+                        } else {
+                            self.sidebar.file_explorer.navigate_up();
                         }
                     }
                     _ => {}

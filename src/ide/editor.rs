@@ -328,42 +328,56 @@ impl Editor {
     pub fn insert_char(&mut self, c: char) {
         if let Some(tab) = self.get_current_tab_mut() {
             tab.insert_char(c);
+            // Ensure cursor stays visible after insertion
+            tab.ensure_cursor_visible(20);
         }
     }
 
     pub fn insert_newline(&mut self) {
         if let Some(tab) = self.get_current_tab_mut() {
             tab.insert_newline();
+            // Ensure cursor stays visible after newline
+            tab.ensure_cursor_visible(20);
         }
     }
 
     pub fn backspace(&mut self) {
         if let Some(tab) = self.get_current_tab_mut() {
             tab.backspace();
+            // Ensure cursor stays visible after backspace
+            tab.ensure_cursor_visible(20);
         }
     }
 
     pub fn move_cursor_up(&mut self) {
         if let Some(tab) = self.get_current_tab_mut() {
             tab.move_cursor_up();
+            // Ensure cursor stays visible after movement
+            tab.ensure_cursor_visible(20); // Use reasonable estimate
         }
     }
 
     pub fn move_cursor_down(&mut self) {
         if let Some(tab) = self.get_current_tab_mut() {
             tab.move_cursor_down();
+            // Ensure cursor stays visible after movement
+            tab.ensure_cursor_visible(20); // Use reasonable estimate
         }
     }
 
     pub fn move_cursor_left(&mut self) {
         if let Some(tab) = self.get_current_tab_mut() {
             tab.move_cursor_left();
+            // Ensure cursor stays visible after movement
+            tab.ensure_cursor_visible(20); // Use reasonable estimate
         }
     }
 
     pub fn move_cursor_right(&mut self) {
         if let Some(tab) = self.get_current_tab_mut() {
             tab.move_cursor_right();
+            // Ensure cursor stays visible after movement
+            tab.ensure_cursor_visible(20); // Use reasonable estimate
         }
     }
 
@@ -394,11 +408,54 @@ impl Editor {
             .unwrap_or(false)
     }
 
+    pub fn scroll_up(&mut self) {
+        if let Some(tab) = self.get_current_tab_mut() {
+            if tab.scroll_offset > 0 {
+                tab.scroll_offset -= 1;
+            }
+        }
+    }
+
+    pub fn scroll_down(&mut self) {
+        if let Some(tab) = self.get_current_tab_mut() {
+            // Use a reasonable estimate for terminal height
+            let estimated_visible_lines = 15; // Conservative estimate 
+            
+            // Allow scrolling if we have more lines than visible and haven't reached the end
+            if tab.lines.len() > estimated_visible_lines {
+                let max_scroll = tab.lines.len().saturating_sub(estimated_visible_lines);
+                if tab.scroll_offset < max_scroll {
+                    tab.scroll_offset += 1;
+                }
+            }
+        }
+    }
+
+    pub fn scroll_up_by_visible(&mut self, visible_lines: usize) {
+        if let Some(tab) = self.get_current_tab_mut() {
+            if tab.scroll_offset > 0 {
+                tab.scroll_offset -= 1;
+            }
+        }
+    }
+
+    pub fn scroll_down_by_visible(&mut self, visible_lines: usize) {
+        if let Some(tab) = self.get_current_tab_mut() {
+            if tab.lines.len() > visible_lines {
+                let max_scroll = tab.lines.len().saturating_sub(visible_lines);
+                if tab.scroll_offset < max_scroll {
+                    tab.scroll_offset += 1;
+                }
+            }
+        }
+    }
+
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, is_focused: bool, mode: AppMode) {
         if let Some(tab) = self.get_current_tab_mut() {
             // Calculate visible lines
             let visible_lines = area.height.saturating_sub(2) as usize; // Account for borders
-            tab.ensure_cursor_visible(visible_lines);
+            // Don't automatically ensure cursor visible - this interferes with manual scrolling
+            // Only call ensure_cursor_visible when cursor moves, not on every draw
 
             let border_style = if is_focused {
                 match mode {

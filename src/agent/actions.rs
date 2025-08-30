@@ -48,7 +48,7 @@ impl AgentActionParser {
         let patterns = [
             (r#"(?i)read\s+(?:the\s+)?file\s+[`"']?([^`"'\s]+)[`"']?"#, "read"),
             (r#"(?i)write\s+(?:to\s+)?(?:the\s+)?file\s+[`"']?([^`"'\s]+)[`"']?"#, "write"),
-            (r#"(?i)create\s+(?:a\s+)?(?:new\s+)?file\s+[`"']?([^`"'\s]+)[`"']?"#, "write"),
+            (r#"(?i)create\s+(?:a\s+)?(?:new\s+)?file(?:\s+called)?\s+[`\"']?([^`\"'\s]+)[`\"']?\"#, "write"),
             (r#"(?i)save\s+(?:to\s+)?[`"']?([^`"'\s]+)[`"']?"#, "write"),
             (r#"(?i)delete\s+(?:the\s+)?file\s+[`"']?([^`"'\s]+)[`"']?"#, "delete"),
             (r#"(?i)remove\s+(?:the\s+)?file\s+[`"']?([^`"'\s]+)[`"']?"#, "delete"),

@@ -39,13 +39,15 @@ pub fn draw_ide(frame: &mut Frame, app: &mut IdeApp) {
 
 fn draw_sidebar(frame: &mut Frame, app: &IdeApp, area: Rect) {
     if app.show_notifications && !app.notifications.is_empty() {
-        // Split sidebar vertically: [File Explorer] [Notifications] [Chat]
+        // Split sidebar vertically: [File Explorer] [Separator] [Notifications] [Separator] [Chat]
         let sidebar_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(8),                            // File explorer (flexible, minimum 8 lines)
-                Constraint::Length(6),                         // Notifications (fixed height)
-                Constraint::Length(app.layout.chat_height),    // Chat (fixed height)
+                Constraint::Min(8),                                    // File explorer (flexible, minimum 8 lines)
+                Constraint::Length(1),                                 // Separator
+                Constraint::Length(app.layout.notification_height),    // Notifications (adjustable height)
+                Constraint::Length(1),                                 // Separator
+                Constraint::Length(app.layout.chat_height),            // Chat (adjustable height)
             ])
             .split(area);
 
@@ -56,41 +58,51 @@ fn draw_sidebar(frame: &mut Frame, app: &IdeApp, area: Rect) {
             app.focused_panel == FocusedPanel::FileExplorer
         );
 
+        // Draw separator between file explorer and notifications
+        draw_horizontal_separator(frame, sidebar_chunks[1], "━", Color::DarkGray);
+
         // Draw notifications
         app.sidebar.notifications.draw(
             frame,
-            sidebar_chunks[1],
+            sidebar_chunks[2],
             &app.notifications,
             false // Notifications are not focusable for now
         );
+
+        // Draw separator between notifications and chat
+        draw_horizontal_separator(frame, sidebar_chunks[3], "━", Color::DarkGray);
+
+        // Draw chat
+        app.sidebar.chat.draw(
+            frame, 
+            sidebar_chunks[4], 
+            app.focused_panel == FocusedPanel::Chat
+        );
+    } else {
+        // Split sidebar vertically: [File Explorer] [Separator] [Chat] (2 blocks layout)
+        let sidebar_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(10),                           // File explorer (flexible)
+                Constraint::Length(1),                         // Separator
+                Constraint::Length(app.layout.chat_height),    // Chat (adjustable height)
+            ])
+            .split(area);
+
+        // Draw file explorer
+        app.sidebar.file_explorer.draw(
+            frame, 
+            sidebar_chunks[0], 
+            app.focused_panel == FocusedPanel::FileExplorer
+        );
+
+        // Draw separator between file explorer and chat
+        draw_horizontal_separator(frame, sidebar_chunks[1], "━", Color::DarkGray);
 
         // Draw chat
         app.sidebar.chat.draw(
             frame, 
             sidebar_chunks[2], 
-            app.focused_panel == FocusedPanel::Chat
-        );
-    } else {
-        // Split sidebar vertically: [File Explorer] [Chat] (original layout)
-        let sidebar_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(10),                           // File explorer (flexible)
-                Constraint::Length(app.layout.chat_height),    // Chat (fixed height)
-            ])
-            .split(area);
-
-        // Draw file explorer
-        app.sidebar.file_explorer.draw(
-            frame, 
-            sidebar_chunks[0], 
-            app.focused_panel == FocusedPanel::FileExplorer
-        );
-
-        // Draw chat
-        app.sidebar.chat.draw(
-            frame, 
-            sidebar_chunks[1], 
             app.focused_panel == FocusedPanel::Chat
         );
     }
@@ -161,13 +173,24 @@ fn draw_tabs(frame: &mut Frame, app: &IdeApp, area: Rect) {
         let is_active = i == active_tab;
         let is_modified = tab.is_modified;
 
-        // Calculate tab position for mouse interaction
+        // Calculate tab position for mouse interaction (must match the actual rendered position)
         let tab_start_x = area.x + tab_spans.iter().map(|span: &Span| span.content.len() as u16).sum::<u16>();
-        let tab_width = (get_file_icon(&tab.file_name).len() + tab.file_name.len() + 4) as u16; // icon + space + name + space + modified indicator + close button
-        let tab_end_x = tab_start_x + tab_width;
-
-        // Check if mouse is hovering over this specific tab
-        let is_hovering_this_tab = is_hovering_tabs && mouse_x >= tab_start_x && mouse_x < tab_end_x;
+        
+        // Calculate the actual tab content to get precise width
+        let modified_indicator = if is_modified { "●" } else { "" };
+        let base_tab_text = format!(" {} {}{} ",
+            get_file_icon(&tab.file_name),
+            tab.file_name,
+            modified_indicator
+        );
+        let base_tab_width = base_tab_text.len() as u16;
+        
+        // Check if mouse is hovering over the base tab area (without close button)
+        let base_tab_end_x = tab_start_x + base_tab_width;
+        let is_hovering_this_tab = is_hovering_tabs && mouse_x >= tab_start_x && mouse_x < base_tab_end_x + 3; // +3 for close button area
+        
+        // Show close button only on hover
+        let show_close_button = is_hovering_this_tab;
 
         // Tab styling
         let (bg_color, fg_color) = if is_active {
@@ -187,9 +210,9 @@ fn draw_tabs(frame: &mut Frame, app: &IdeApp, area: Rect) {
             style = style.add_modifier(Modifier::BOLD);
         }
 
-        // Tab content with close button
+        // Tab content with close button (only show on hover)
         let modified_indicator = if is_modified { "●" } else { "" };
-        let close_button = if is_hovering_this_tab { " ✕" } else { "" };
+        let close_button = if show_close_button { " ✕" } else { "" };
         let tab_text = format!(" {} {}{}{} ",
             get_file_icon(&tab.file_name),
             tab.file_name,
@@ -422,14 +445,35 @@ pub fn get_tab_click_info(app: &crate::ide::app::IdeApp, x: u16, y: u16, area: R
         return None;
     }
 
-    let mut current_x = area.x;
+    let mouse_x = x;
+    let mouse_y = y;
+    let is_hovering_tabs = mouse_y == tab_area_y && mouse_x >= area.x && mouse_x < area.x + area.width;
+
+    // Use the same logic as draw_tabs to calculate positions
+    let mut tab_spans_lengths = Vec::new();
+    
     for (i, tab) in tabs.iter().enumerate() {
-        let is_active = i == app.editor.get_active_tab_index();
         let is_modified = tab.is_modified;
 
-        // Calculate tab content (same as in draw_tabs)
+        // Calculate tab position exactly like in draw_tabs
+        let tab_start_x = area.x + tab_spans_lengths.iter().sum::<u16>();
+        
+        // Calculate the actual tab content to get precise width (same as in draw_tabs)
         let modified_indicator = if is_modified { "●" } else { "" };
-        let close_button = " ✕"; // Always include close button in width calculation
+        let base_tab_text = format!(" {} {}{} ",
+            get_file_icon(&tab.file_name),
+            tab.file_name,
+            modified_indicator
+        );
+        let base_tab_width = base_tab_text.len() as u16;
+        let base_tab_end_x = tab_start_x + base_tab_width;
+        
+        // Check if mouse is hovering over this specific tab (including close button area)
+        let is_hovering_this_tab = is_hovering_tabs && mouse_x >= tab_start_x && mouse_x < base_tab_end_x + 3; // +3 for close button
+        let show_close_button = is_hovering_this_tab;
+
+        // Calculate complete tab content with close button
+        let close_button = if show_close_button { " ✕" } else { "" };
         let tab_text = format!(" {} {}{}{} ",
             get_file_icon(&tab.file_name),
             tab.file_name,
@@ -438,27 +482,48 @@ pub fn get_tab_click_info(app: &crate::ide::app::IdeApp, x: u16, y: u16, area: R
         );
 
         let tab_width = tab_text.len() as u16;
-        let tab_end_x = current_x + tab_width;
+        let tab_end_x = tab_start_x + tab_width;
 
-        if x >= current_x && x < tab_end_x {
-            // Check if click is on close button (last few characters)
-            let close_button_start = tab_end_x - close_button.len() as u16;
-            let is_close_button = x >= close_button_start;
-            return Some((i, is_close_button));
+        if x >= tab_start_x && x < tab_end_x {
+            // Check if click is on close button (only if it's visible)
+            if show_close_button {
+                let close_button_start = base_tab_end_x; // Close button starts after base content
+                let close_button_end = close_button_start + 3; // " ✕ " is 3 characters
+                let is_close_button = x >= close_button_start && x < close_button_end;
+                
+                // Debug info - this will help us understand what's happening
+                eprintln!("DEBUG: Tab {} click at x={}, tab_range=({}-{}), close_range=({}-{}), is_close={}", 
+                    i, x, tab_start_x, tab_end_x, close_button_start, close_button_end, is_close_button);
+                
+                return Some((i, is_close_button));
+            } else {
+                return Some((i, false)); // No close button visible, so not a close click
+            }
         }
 
-        current_x = tab_end_x + 1; // +1 for separator "│"
+        // Add this tab's width to the running total (like the spans in draw_tabs)
+        tab_spans_lengths.push(tab_width);
+        if i < tabs.len() - 1 {
+            tab_spans_lengths.push(1); // +1 for separator "│"
+        }
     }
 
     // Check for new tab button
     let new_tab_text = " + ";
-    let new_tab_start = current_x;
+    let new_tab_start = area.x + tab_spans_lengths.iter().sum::<u16>();
     let new_tab_end = new_tab_start + new_tab_text.len() as u16;
     if x >= new_tab_start && x < new_tab_end {
         return Some((usize::MAX, false)); // Special value for new tab
     }
 
     None
+}
+
+fn draw_horizontal_separator(frame: &mut Frame, area: Rect, separator_char: &str, color: Color) {
+    let separator_text = separator_char.repeat(area.width as usize);
+    let separator = Paragraph::new(separator_text)
+        .style(Style::default().fg(color));
+    frame.render_widget(separator, area);
 }
 
 /// Create a centered rectangle with the given percentage of width and height

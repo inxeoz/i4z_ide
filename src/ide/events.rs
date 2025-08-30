@@ -28,6 +28,8 @@ pub enum IdeEvent {
     ResizeSidebarShrink,
     ResizeChatExpand,
     ResizeChatShrink,
+    ResizeNotificationsExpand,
+    ResizeNotificationsShrink,
     
     // File operations
     OpenFile(PathBuf),
@@ -117,6 +119,8 @@ impl EventHandler {
     fn handle_ctrl_shift_key(&self, key_code: KeyCode) -> Option<IdeEvent> {
         match key_code {
             KeyCode::Tab => Some(IdeEvent::PreviousTab),
+            KeyCode::Up => Some(IdeEvent::ResizeNotificationsShrink),
+            KeyCode::Down => Some(IdeEvent::ResizeNotificationsExpand),
             _ => None,
         }
     }
