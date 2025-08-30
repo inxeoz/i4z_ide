@@ -1,5 +1,4 @@
 mod api;
-mod cli;
 mod config;
 mod clipboard;
 mod conversation;
@@ -8,12 +7,21 @@ mod agent;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use cli::TerminalInterface;
 use config::Config;
 
 #[derive(Parser)]
 #[command(name = "agent")]
-#[command(about = "A Rust-based coding agent with Groq API support")]
+#[command(about = "A Rust-based TUI IDE with integrated AI coding agent")]
+#[command(long_about = "
+A terminal-based IDE with integrated AI assistant powered by Groq API.
+Features:
+• Multi-tab file editor with syntax highlighting
+• File explorer with create/delete/rename operations  
+• AI chat with image support and agentic mode
+• Vim-like navigation and keyboard shortcuts
+• Mouse support for clicking and scrolling
+
+Run without arguments to start the IDE. Use 'config' subcommand to set API keys.")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -21,11 +29,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start TUI interface (default)
-    Tui,
-    /// Start interactive chat session (legacy CLI)
-    Chat,
-    /// Configure the agent
+    /// Configure the agent (API keys, models, etc.)
     Config {
         /// Set Groq API key
         #[arg(long)]
@@ -33,14 +37,6 @@ enum Commands {
         /// Set default model
         #[arg(long)]
         model: Option<String>,
-    },
-    /// Send a single message
-    Ask {
-        /// The message to send
-        message: String,
-        /// Include clipboard image
-        #[arg(long)]
-        image: bool,
     },
 }
 
@@ -50,27 +46,36 @@ async fn main() -> Result<()> {
     let config = Config::load()?;
 
     match cli.command {
-        Some(Commands::Tui) | None => {
-            ide::run_ide(config).await?;
-        }
-        Some(Commands::Chat) => {
-            let mut terminal = TerminalInterface::new(config).await?;
-            terminal.start_interactive_session().await?;
-        }
         Some(Commands::Config { groq_key, model }) => {
             let mut config = config;
+            let mut updates = Vec::new();
+            
             if let Some(key) = groq_key {
                 config.set_groq_key(key)?;
-                println!("Groq API key updated");
+                updates.push("Groq API key updated");
             }
             if let Some(model) = model {
                 config.set_model(model)?;
-                println!("Default model updated");
+                updates.push("Default model updated");
+            }
+            
+            if updates.is_empty() {
+                // No changes made, start TUI with info
+                let mut app = ide::IdeApp::new(config).await?;
+                app.add_notification("Use config subcommand with --groq-key or --model to configure".to_string(), ide::NotificationType::Info);
+                return ide::run_ide_with_app(app).await;
+            } else {
+                // Changes made, start TUI with success notification  
+                let mut app = ide::IdeApp::new(config).await?;
+                for update in updates {
+                    app.add_notification(format!("✅ {}", update), ide::NotificationType::Info);
+                }
+                return ide::run_ide_with_app(app).await;
             }
         }
-        Some(Commands::Ask { message, image }) => {
-            let mut terminal = TerminalInterface::new(config).await?;
-            terminal.ask_single_question(message, image).await?;
+        None => {
+            // Always run TUI IDE by default
+            ide::run_ide(config).await?;
         }
     }
 

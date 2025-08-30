@@ -39,8 +39,6 @@ dirs = "5.0"
 # Error handling
 anyhow = "1.0"
 thiserror = "1.0"
-# Terminal styling
-console = "0.15"
 # UUID for unique identifiers
 uuid = { version = "1.0", features = ["v4"] }
 # Time handling

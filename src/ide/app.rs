@@ -20,6 +20,7 @@ pub enum NotificationType {
     MouseClick,
     FileOperation,
     Info,
+    Debug,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -34,6 +35,7 @@ pub enum FocusedPanel {
     FileExplorer,
     Editor,
     Chat,
+    Notifications,
 }
 
 pub struct LayoutState {
@@ -44,10 +46,16 @@ pub struct LayoutState {
     pub max_sidebar_width: u16,
     pub min_chat_height: u16,
     pub min_notification_height: u16,
+    // Actual component areas for precise mouse coordinate mapping
+    pub file_explorer_area: ratatui::layout::Rect,
+    pub notification_area: ratatui::layout::Rect,  
+    pub chat_area: ratatui::layout::Rect,
+    pub editor_area: ratatui::layout::Rect,
 }
 
 impl Default for LayoutState {
     fn default() -> Self {
+        use ratatui::layout::Rect;
         Self {
             sidebar_width: 30,
             chat_height: 12,
@@ -56,6 +64,11 @@ impl Default for LayoutState {
             max_sidebar_width: 60,
             min_chat_height: 8,
             min_notification_height: 4,
+            // Initialize with empty areas, will be updated during layout
+            file_explorer_area: Rect::new(0, 0, 0, 0),
+            notification_area: Rect::new(0, 0, 0, 0),
+            chat_area: Rect::new(0, 0, 0, 0),
+            editor_area: Rect::new(0, 0, 0, 0),
         }
     }
 }
@@ -188,9 +201,17 @@ impl IdeApp {
     }
 
     pub fn cycle_focus(&mut self) {
+        // Only include Notifications in cycling if they're visible
         self.focused_panel = match self.focused_panel {
             FocusedPanel::FileExplorer => FocusedPanel::Editor,
-            FocusedPanel::Editor => FocusedPanel::Chat,
+            FocusedPanel::Editor => {
+                if self.show_notifications && !self.notifications.is_empty() {
+                    FocusedPanel::Notifications
+                } else {
+                    FocusedPanel::Chat
+                }
+            },
+            FocusedPanel::Notifications => FocusedPanel::Chat,
             FocusedPanel::Chat => FocusedPanel::FileExplorer,
         };
     }
@@ -208,6 +229,18 @@ impl IdeApp {
     pub fn resize_notifications(&mut self, delta: i16) {
         let new_height = (self.layout.notification_height as i16 + delta).max(self.layout.min_notification_height as i16);
         self.layout.notification_height = (new_height as u16).min(15); // Max 15 lines for notifications
+    }
+
+    pub fn update_component_areas(&mut self, 
+        file_explorer_area: ratatui::layout::Rect,
+        notification_area: ratatui::layout::Rect,
+        chat_area: ratatui::layout::Rect,
+        editor_area: ratatui::layout::Rect
+    ) {
+        self.layout.file_explorer_area = file_explorer_area;
+        self.layout.notification_area = notification_area;
+        self.layout.chat_area = chat_area;
+        self.layout.editor_area = editor_area;
     }
 
     pub fn show_create_file_dialog(&mut self) {
@@ -258,6 +291,10 @@ impl IdeApp {
         }
     }
 
+    pub fn add_debug_notification(&mut self, message: String) {
+        self.add_notification(format!("DEBUG: {}", message), NotificationType::Debug);
+    }
+
     pub fn clear_notifications(&mut self) {
         self.notifications.clear();
         self.show_notifications = false;
@@ -273,50 +310,49 @@ impl IdeApp {
     }
 
     fn get_mouse_context(&self, x: u16, y: u16) -> String {
-        if x < self.layout.sidebar_width {
-            // Calculate dynamic areas based on notification visibility with separators
-            let file_explorer_end = if self.show_notifications && !self.notifications.is_empty() {
-                // When notifications are shown: file explorer, then separator, then notifications, separator, chat
-                let total_sidebar_height = 30; // Approximate terminal height available for sidebar
-                let notifications_height = self.layout.notification_height;
-                let chat_height = self.layout.chat_height;
-                let separators_height = 2; // Two separators
-                total_sidebar_height - notifications_height - chat_height - separators_height
-            } else {
-                // When no notifications: file explorer, separator, chat
-                let total_sidebar_height = 30;
-                let chat_height = self.layout.chat_height;
-                let separator_height = 1; // One separator
-                total_sidebar_height - chat_height - separator_height
-            };
+        // Use accurate component areas for precise mouse coordinate mapping
+        use ratatui::layout::Rect;
+        
+        // Check if in file explorer area
+        if self.point_in_rect(x, y, self.layout.file_explorer_area) {
+            return "File Explorer".to_string();
+        }
+        
+        // Check if in notification area (if visible)
+        if self.show_notifications && !self.notifications.is_empty() 
+            && self.point_in_rect(x, y, self.layout.notification_area) {
+            return "Notifications".to_string();
+        }
+        
+        // Check if in chat area
+        if self.point_in_rect(x, y, self.layout.chat_area) {
+            return "AI Chat".to_string();
+        }
+        
+        // Check if in editor area
+        if self.point_in_rect(x, y, self.layout.editor_area) {
+            return "Editor".to_string();
+        }
+        
+        // Default fallback
+        "Unknown".to_string()
+    }
 
-            if y <= file_explorer_end {
-                "File Explorer"
-            } else if self.show_notifications && !self.notifications.is_empty() {
-                let notifications_start = file_explorer_end + 1; // After separator
-                let notifications_end = notifications_start + self.layout.notification_height;
-                if y >= notifications_start && y <= notifications_end {
-                    "Notifications"
-                } else {
-                    "AI Chat"
-                }
-            } else {
-                "AI Chat"
-            }
-        } else {
-            "Editor"
-        }.to_string()
+    fn point_in_rect(&self, x: u16, y: u16, rect: ratatui::layout::Rect) -> bool {
+        x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
     }
 
     fn get_clicked_file_item(&self, x: u16, y: u16) -> Option<(PathBuf, bool)> {
+        // Use accurate file explorer area for precise coordinate mapping
+        let area = self.layout.file_explorer_area;
+        
         // Check if click is in file explorer area
-        if x >= self.layout.sidebar_width {
+        if !self.point_in_rect(x, y, area) {
             return None;
         }
 
-        // Calculate which file item was clicked based on y coordinate
-        let file_explorer_start_y = 1; // Account for border
-        let relative_y = y.saturating_sub(file_explorer_start_y);
+        // Calculate which file item was clicked based on relative y coordinate within the area
+        let relative_y = y.saturating_sub(area.y + 1); // +1 for border
         
         let flat_list = self.sidebar.file_explorer.root.get_flat_list();
         let clicked_index = relative_y as usize;
@@ -334,38 +370,64 @@ impl IdeApp {
         flat_list.iter().position(|node| node.path == target_path)
     }
 
-    fn is_click_in_tab_area(&self, x: u16, y: u16) -> bool {
+    fn get_clicked_notification_item(&self, x: u16, y: u16) -> Option<usize> {
+        // Use accurate notification area for precise coordinate mapping
+        let area = self.layout.notification_area;
+        
+        // Check if click is in notification area
+        if !self.point_in_rect(x, y, area) {
+            return None;
+        }
+
+        // Calculate which notification item was clicked based on relative y coordinate within the area
+        let relative_y = y.saturating_sub(area.y + 1); // +1 for border
+        
+        // Notifications are shown in reverse order (newest first), limited to 5 items
+        let visible_notifications = self.notifications.len().min(5);
+        let clicked_index = relative_y as usize;
+        
+        if clicked_index < visible_notifications {
+            // Since notifications are reversed, map back to actual index
+            let actual_index = self.notifications.len() - 1 - clicked_index;
+            Some(actual_index)
+        } else {
+            None
+        }
+    }
+
+    fn get_clicked_chat_area(&self, x: u16, y: u16) -> bool {
+        // Use accurate chat area for coordinate mapping
+        let area = self.layout.chat_area;
+        self.point_in_rect(x, y, area)
+    }
+
+    fn is_click_in_tab_area(&self, x: u16, y: u16) -> (bool, u16, u16) {
         if !self.editor.has_open_files() {
-            return false;
+            return (false, 0, 0);
         }
 
-        // Tab area is in the main editor area (after sidebar)
-        let main_area_start_x = self.layout.sidebar_width;
+        // Tab area is inside the editor border now
+        let main_area_start_x = self.layout.sidebar_width + 1; // +1 for editor's left border
+        let tab_y = 1; // Row 1 is the tab row inside the editor border (0-based, so 1 = inside top border)
 
-        // Be more flexible with Y coordinates - tabs are typically at the top of the editor area
-        // The tabs are drawn in the first few rows of the editor area
-        let result = x >= main_area_start_x && y >= 1 && y <= 4; // More focused range for tab area
+        // Tab area is specifically at row 2 inside the editor border
+        let result = x >= main_area_start_x && y == tab_y;
         
-        // Debug output to help with click detection
-        if x >= main_area_start_x && y >= 1 && y <= 10 {
-            eprintln!("DEBUG: Click at ({}, {}) - main_area_start_x={}, in_tab_area={}", x, y, main_area_start_x, result);
-        }
-        
-        result
+        (result, main_area_start_x, tab_y)
     }
 
     fn get_tab_click_info(&self, x: u16, y: u16) -> Option<(usize, bool)> {
         use crate::ide::layout;
         use ratatui::layout::Rect;
 
-        if !self.is_click_in_tab_area(x, y) {
+        let (is_in_tab_area, expected_x, expected_y) = self.is_click_in_tab_area(x, y);
+        if !is_in_tab_area {
             return None;
         }
 
-        // Create a rect representing the tab area
-        // Use a flexible area that covers the likely tab positions
-        let tab_area = Rect::new(self.layout.sidebar_width, y.saturating_sub(2), 200, 5);
-        layout::get_tab_click_info(self, x, y, tab_area)
+        // Create a rect representing the editor area (function will add +1 for tab position inside border)
+        let editor_area = Rect::new(self.layout.sidebar_width, 0, 200, 20); // Editor area starts after sidebar at y=0
+        layout::get_tab_click_info(self, x, y, editor_area)
     }
 
     fn get_tab_index_from_x(&self, x: u16) -> Option<usize> {
@@ -479,6 +541,7 @@ impl IdeApp {
             IdeEvent::FocusFileExplorer => self.focus_panel(FocusedPanel::FileExplorer),
             IdeEvent::FocusEditor => self.focus_panel(FocusedPanel::Editor),
             IdeEvent::FocusChat => self.focus_panel(FocusedPanel::Chat),
+            IdeEvent::FocusNotifications => self.focus_panel(FocusedPanel::Notifications),
             IdeEvent::CycleFocus => self.cycle_focus(),
             
             IdeEvent::InsertMode => self.set_mode(AppMode::Insert),
@@ -590,6 +653,7 @@ impl IdeApp {
                     FocusedPanel::FileExplorer => self.sidebar.file_explorer.navigate_up(),
                     FocusedPanel::Editor => self.editor.move_cursor_up(),
                     FocusedPanel::Chat => self.sidebar.chat.scroll_up(),
+                    FocusedPanel::Notifications => self.sidebar.notifications.scroll_up(),
                 }
             }
             
@@ -598,6 +662,7 @@ impl IdeApp {
                     FocusedPanel::FileExplorer => self.sidebar.file_explorer.navigate_down(),
                     FocusedPanel::Editor => self.editor.move_cursor_down(),
                     FocusedPanel::Chat => self.sidebar.chat.scroll_down(),
+                    FocusedPanel::Notifications => self.sidebar.notifications.scroll_down(self.notifications.len()),
                 }
             }
             
@@ -706,6 +771,33 @@ impl IdeApp {
             IdeEvent::MouseMove(x, y) => {
                 self.update_mouse_position(x, y);
 
+                // Check if hovering over tab area and show tab-specific notifications
+                let (is_in_tab_area, _, _) = self.is_click_in_tab_area(x, y);
+                if is_in_tab_area {
+                    if let Some((tab_index, is_close_button)) = self.get_tab_click_info(x, y) {
+                        if tab_index == usize::MAX {
+                            // Hovering over new tab button
+                            self.add_notification("New tab button hovered".to_string(), NotificationType::MouseHover);
+                        } else {
+                            // Get tab info to show file name
+                            let tabs = self.editor.get_tab_info();
+                            if let Some(tab) = tabs.get(tab_index) {
+                                if is_close_button {
+                                    self.add_notification(
+                                        format!("{} tab close button hovered", tab.file_name),
+                                        NotificationType::MouseHover
+                                    );
+                                } else {
+                                    self.add_notification(
+                                        format!("{} tab hovered", tab.file_name),
+                                        NotificationType::MouseHover
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Handle tab dragging - start dragging if mouse moved enough from click position
                 if !self.is_dragging_tab && self.dragged_tab_index.is_some() {
                     let drag_threshold = 3; // Minimum pixels to start dragging
@@ -728,7 +820,7 @@ impl IdeApp {
                 }
             }
 
-            IdeEvent::MouseRelease(x, y) => {
+            IdeEvent::MouseRelease(_x, _y) => {
                 // End tab dragging
                 if self.is_dragging_tab {
                     self.is_dragging_tab = false;
@@ -747,22 +839,45 @@ impl IdeApp {
                 self.is_dragging_tab = false;
                 self.dragged_tab_index = None;
 
+                // Add comprehensive mouse click debugging with actual component areas
+                self.add_debug_notification(format!(
+                    "Mouse click at ({}, {}) | File Explorer: {}x{} at ({},{}) | Editor: {}x{} at ({},{}) | Chat: {}x{} at ({},{}) | Notifications: {}x{} at ({},{})", 
+                    x, y,
+                    self.layout.file_explorer_area.width, self.layout.file_explorer_area.height,
+                    self.layout.file_explorer_area.x, self.layout.file_explorer_area.y,
+                    self.layout.editor_area.width, self.layout.editor_area.height,
+                    self.layout.editor_area.x, self.layout.editor_area.y,
+                    self.layout.chat_area.width, self.layout.chat_area.height,
+                    self.layout.chat_area.x, self.layout.chat_area.y,
+                    self.layout.notification_area.width, self.layout.notification_area.height,
+                    self.layout.notification_area.x, self.layout.notification_area.y
+                ));
+
                 // First check if click is in tab area
-                if self.is_click_in_tab_area(x, y) {
-                    self.add_notification(format!("Tab area click detected at ({}, {})", x, y), NotificationType::MouseClick);
+                let (is_in_tab_area, expected_x, expected_y) = self.is_click_in_tab_area(x, y);
+                self.add_debug_notification(format!(
+                    "Tab area check: click({},{}) vs expected area x>={}, y=={} -> result: {}", 
+                    x, y, expected_x, expected_y, is_in_tab_area
+                ));
+                
+                if is_in_tab_area {
+                    self.add_debug_notification(format!("Click detected in tab area at ({}, {})", x, y));
                     if let Some((tab_index, is_close_button)) = self.get_tab_click_info(x, y) {
-                        self.add_notification(
-                            format!("Tab click: index={}, is_close={}", tab_index, is_close_button),
-                            NotificationType::MouseClick
-                        );
-                        
+                        // Add debug notification for tab clicks
+                        self.add_debug_notification(format!("Tab click: index={}, is_close={}", tab_index, is_close_button));
                         if is_close_button && tab_index != usize::MAX {
+                            // Get tab info before closing
+                            let tabs = self.editor.get_tab_info();
+                            let file_name = tabs.get(tab_index)
+                                .map(|tab| tab.file_name.clone())
+                                .unwrap_or_else(|| "Unknown".to_string());
+                            
                             // Close the tab
                             if let Some(tab_id) = self.editor.get_tab_id_at_index(tab_index) {
                                 self.editor.close_tab_by_id(tab_id);
                                 self.add_notification(
-                                    format!("✅ Closed tab {} (ID: {})", tab_index + 1, tab_id),
-                                    NotificationType::FileOperation
+                                    format!("{} tab close button clicked", file_name),
+                                    NotificationType::MouseClick
                                 );
                             } else {
                                 self.add_notification(
@@ -774,8 +889,17 @@ impl IdeApp {
                             // New tab button clicked
                             self.editor.new_file();
                             self.focus_panel(FocusedPanel::Editor);
-                            self.add_notification("New tab created".to_string(), NotificationType::FileOperation);
+                            self.add_notification("New tab button clicked".to_string(), NotificationType::MouseClick);
                         } else {
+                            // Get tab info to show file name
+                            let tabs = self.editor.get_tab_info();
+                            if let Some(tab) = tabs.get(tab_index) {
+                                self.add_notification(
+                                    format!("{} tab clicked", tab.file_name),
+                                    NotificationType::MouseClick
+                                );
+                            }
+                            
                             // Switch to the tab immediately on click
                             self.editor.switch_to_tab(tab_index);
                             self.focus_panel(FocusedPanel::Editor);
@@ -842,15 +966,35 @@ impl IdeApp {
                         match context.as_str() {
                             "AI Chat" => {
                                 self.focus_panel(FocusedPanel::Chat);
-                                self.add_notification("Focused AI Chat".to_string(), NotificationType::Info);
+                                
+                                // Enhanced chat area click detection
+                                let area = self.layout.chat_area;
+                                let relative_x = x.saturating_sub(area.x + 1); // +1 for border
+                                let relative_y = y.saturating_sub(area.y + 1); // +1 for border
+                                
+                                self.add_notification(
+                                    format!("💬 Clicked AI Chat at relative position ({}, {})", relative_x, relative_y),
+                                    NotificationType::MouseClick
+                                );
                             }
                             "Editor" => {
                                 self.focus_panel(FocusedPanel::Editor);
                                 self.add_notification("Focused Editor".to_string(), NotificationType::Info);
                             }
                             "Notifications" => {
-                                // Notifications panel clicked - maybe add scroll functionality later
-                                self.add_notification("Clicked in notifications area".to_string(), NotificationType::Info);
+                                self.focus_panel(FocusedPanel::Notifications);
+                                
+                                // Check if clicked on a specific notification
+                                if let Some(notification_index) = self.get_clicked_notification_item(x, y) {
+                                    if let Some(notification) = self.notifications.get(notification_index) {
+                                        self.add_notification(
+                                            format!("📋 Clicked on notification: {}", notification.message),
+                                            NotificationType::MouseClick
+                                        );
+                                    }
+                                } else {
+                                    self.add_notification("Focused Notifications".to_string(), NotificationType::Info);
+                                }
                             }
                             _ => {}
                         }
@@ -890,6 +1034,13 @@ impl IdeApp {
                             self.sidebar.file_explorer.navigate_down();
                         } else {
                             self.sidebar.file_explorer.navigate_up();
+                        }
+                    }
+                    "Notifications" => {
+                        if delta > 0 {
+                            self.sidebar.notifications.scroll_down(self.notifications.len());
+                        } else {
+                            self.sidebar.notifications.scroll_up();
                         }
                     }
                     _ => {}

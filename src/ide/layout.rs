@@ -37,7 +37,7 @@ pub fn draw_ide(frame: &mut Frame, app: &mut IdeApp) {
     draw_main_ide_layout(frame, app, size);
 }
 
-fn draw_sidebar(frame: &mut Frame, app: &IdeApp, area: Rect) {
+fn draw_sidebar(frame: &mut Frame, app: &mut IdeApp, area: Rect) {
     if app.show_notifications && !app.notifications.is_empty() {
         // Split sidebar vertically: [File Explorer] [Separator] [Notifications] [Separator] [Chat]
         let sidebar_chunks = Layout::default()
@@ -66,7 +66,7 @@ fn draw_sidebar(frame: &mut Frame, app: &IdeApp, area: Rect) {
             frame,
             sidebar_chunks[2],
             &app.notifications,
-            false // Notifications are not focusable for now
+            app.focused_panel == FocusedPanel::Notifications
         );
 
         // Draw separator between notifications and chat
@@ -77,6 +77,14 @@ fn draw_sidebar(frame: &mut Frame, app: &IdeApp, area: Rect) {
             frame, 
             sidebar_chunks[4], 
             app.focused_panel == FocusedPanel::Chat
+        );
+
+        // Update component areas for mouse coordinate mapping (with notifications)
+        app.update_component_areas(
+            sidebar_chunks[0],  // file explorer
+            sidebar_chunks[2],  // notifications
+            sidebar_chunks[4],  // chat
+            Rect::new(0, 0, 0, 0) // editor (will be updated in main area)
         );
     } else {
         // Split sidebar vertically: [File Explorer] [Separator] [Chat] (2 blocks layout)
@@ -105,6 +113,14 @@ fn draw_sidebar(frame: &mut Frame, app: &IdeApp, area: Rect) {
             sidebar_chunks[2], 
             app.focused_panel == FocusedPanel::Chat
         );
+
+        // Update component areas for mouse coordinate mapping (without notifications)
+        app.update_component_areas(
+            sidebar_chunks[0],  // file explorer
+            Rect::new(0, 0, 0, 0), // no notifications
+            sidebar_chunks[2],  // chat
+            Rect::new(0, 0, 0, 0) // editor (will be updated in main area)
+        );
     }
 }
 
@@ -121,155 +137,24 @@ fn draw_main_area(frame: &mut Frame, app: &mut IdeApp, area: Rect) {
     // Draw editor with tabs
     draw_editor_area(frame, app, main_chunks[0]);
     
+    // Update editor area for mouse coordinate mapping
+    app.layout.editor_area = main_chunks[0];
+    
     // Draw status bar
     let status_info = app.get_status_info();
     app.statusbar.draw(frame, main_chunks[1], &status_info);
 }
 
 fn draw_editor_area(frame: &mut Frame, app: &mut IdeApp, area: Rect) {
-    if app.editor.has_open_files() {
-        // Split editor area: [Tabs] [Editor content]
-        let editor_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),     // Tab bar
-                Constraint::Min(5),        // Editor content
-            ])
-            .split(area);
-
-        // Draw tabs
-        draw_tabs(frame, app, editor_chunks[0]);
-        
-        // Draw editor content
-        app.editor.draw(
-            frame, 
-            editor_chunks[1], 
-            app.focused_panel == FocusedPanel::Editor,
-            app.mode
-        );
-    } else {
-        // Draw welcome screen when no files are open
-        draw_welcome_screen(frame, area);
-    }
+    // Editor now handles tabs internally, so just give it the full area
+    app.editor.draw(
+        frame, 
+        area, 
+        app.focused_panel == FocusedPanel::Editor,
+        app.mode
+    );
 }
 
-fn draw_tabs(frame: &mut Frame, app: &IdeApp, area: Rect) {
-    let tabs = app.editor.get_tab_info();
-    let active_tab = app.editor.get_active_tab_index();
-
-    if tabs.is_empty() {
-        return;
-    }
-
-    let mut tab_spans = Vec::new();
-    let mouse_x = app.mouse_position.0;
-    let mouse_y = app.mouse_position.1;
-    let tab_area_y = area.y;
-
-    // Check if mouse is hovering over tab area
-    let is_hovering_tabs = mouse_y == tab_area_y && mouse_x >= area.x && mouse_x < area.x + area.width;
-
-    for (i, tab) in tabs.iter().enumerate() {
-        let is_active = i == active_tab;
-        let is_modified = tab.is_modified;
-
-        // Calculate tab position for mouse interaction (must match the actual rendered position)
-        let tab_start_x = area.x + tab_spans.iter().map(|span: &Span| span.content.len() as u16).sum::<u16>();
-        
-        // Calculate the actual tab content to get precise width
-        let modified_indicator = if is_modified { "●" } else { "" };
-        let base_tab_text = format!(" {} {}{} ",
-            get_file_icon(&tab.file_name),
-            tab.file_name,
-            modified_indicator
-        );
-        let base_tab_width = base_tab_text.len() as u16;
-        
-        // Check if mouse is hovering over the base tab area (without close button)
-        let base_tab_end_x = tab_start_x + base_tab_width;
-        let is_hovering_this_tab = is_hovering_tabs && mouse_x >= tab_start_x && mouse_x < base_tab_end_x + 3; // +3 for close button area
-        
-        // Show close button only on hover
-        let show_close_button = is_hovering_this_tab;
-
-        // Tab styling
-        let (bg_color, fg_color) = if is_active {
-            if app.focused_panel == FocusedPanel::Editor {
-                (Color::Cyan, Color::Black)
-            } else {
-                (Color::Blue, Color::White)
-            }
-        } else if is_hovering_this_tab {
-            (Color::Gray, Color::White)
-        } else {
-            (Color::DarkGray, Color::Gray)
-        };
-
-        let mut style = Style::default().bg(bg_color).fg(fg_color);
-        if is_active {
-            style = style.add_modifier(Modifier::BOLD);
-        }
-
-        // Tab content with close button (only show on hover)
-        let modified_indicator = if is_modified { "●" } else { "" };
-        let close_button = if show_close_button { " ✕" } else { "" };
-        let tab_text = format!(" {} {}{}{} ",
-            get_file_icon(&tab.file_name),
-            tab.file_name,
-            modified_indicator,
-            close_button
-        );
-
-        tab_spans.push(Span::styled(tab_text, style));
-
-        // Tab separator
-        if i < tabs.len() - 1 {
-            tab_spans.push(Span::raw("│"));
-        }
-    }
-
-    // Add new tab button
-    tab_spans.push(Span::styled(" + ", Style::default().fg(Color::Gray)));
-
-    let tabs_line = Line::from(tab_spans);
-    let tabs_paragraph = Paragraph::new(tabs_line)
-        .block(Block::default()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray)));
-
-    frame.render_widget(tabs_paragraph, area);
-}
-
-fn draw_welcome_screen(frame: &mut Frame, area: Rect) {
-    let welcome_text = vec![
-        Line::from(Span::styled("🦀 Rust Coding Agent", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
-        Line::from(""),
-        Line::from("Welcome to your Rust IDE! Start by:"),
-        Line::from(""),
-        Line::from(Span::styled("📁 Opening a file from the explorer (Alt+1)", Style::default().fg(Color::Yellow))),
-        Line::from(Span::styled("📄 Creating a new file (Ctrl+N)", Style::default().fg(Color::Yellow))),
-        Line::from(Span::styled("💬 Chatting with AI (Alt+3)", Style::default().fg(Color::Yellow))),
-        Line::from(""),
-        Line::from("Quick shortcuts:"),
-        Line::from("• Tab - Cycle between panels"),
-        Line::from("• Ctrl+H - Command help"),
-        Line::from("• F1 or ? - General help"),
-        Line::from("• Ctrl+Q - Quit"),
-        Line::from(""),
-        Line::from(Span::styled("Happy coding! 🚀", Style::default().fg(Color::Green))),
-    ];
-
-    let welcome = Paragraph::new(welcome_text)
-        .alignment(Alignment::Center)
-        .block(Block::default()
-            .title(" Welcome ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)));
-
-    // Center the welcome screen
-    let welcome_area = centered_rect(60, 70, area);
-    frame.render_widget(welcome, welcome_area);
-}
 
 fn draw_command_help_overlay(frame: &mut Frame, area: Rect) {
     // Clear the background
@@ -439,15 +324,22 @@ pub fn get_tab_click_info(app: &crate::ide::app::IdeApp, x: u16, y: u16, area: R
         return None;
     }
 
-    let tab_area_y = area.y;
-    // Allow clicks within the tab area
-    if y < tab_area_y || y >= tab_area_y + area.height {
+    // Tabs are now inside the editor border, so adjust for the border
+    let tab_area_y = area.y + 1; // +1 for top border
+    let tab_area_x = area.x + 1; // +1 for left border
+    let tab_area_width = area.width.saturating_sub(2); // -2 for left and right borders
+    
+    // Debug the tab area calculation in layout function
+    // Note: Can't add notifications from here, but this helps us understand the calculation
+    
+    // Allow clicks within the tab area (which is now inside the editor border)
+    if y != tab_area_y || x < tab_area_x || x >= tab_area_x + tab_area_width {
         return None;
     }
 
     let mouse_x = x;
     let mouse_y = y;
-    let is_hovering_tabs = mouse_y == tab_area_y && mouse_x >= area.x && mouse_x < area.x + area.width;
+    let is_hovering_tabs = mouse_y == tab_area_y && mouse_x >= tab_area_x && mouse_x < tab_area_x + tab_area_width;
 
     // Use the same logic as draw_tabs to calculate positions
     let mut tab_spans_lengths = Vec::new();
@@ -455,8 +347,8 @@ pub fn get_tab_click_info(app: &crate::ide::app::IdeApp, x: u16, y: u16, area: R
     for (i, tab) in tabs.iter().enumerate() {
         let is_modified = tab.is_modified;
 
-        // Calculate tab position exactly like in draw_tabs
-        let tab_start_x = area.x + tab_spans_lengths.iter().sum::<u16>();
+        // Calculate tab position - tabs start at the inner area (inside border)
+        let tab_start_x = tab_area_x + tab_spans_lengths.iter().sum::<u16>();
         
         // Calculate the actual tab content to get precise width (same as in draw_tabs)
         let modified_indicator = if is_modified { "●" } else { "" };
@@ -491,9 +383,7 @@ pub fn get_tab_click_info(app: &crate::ide::app::IdeApp, x: u16, y: u16, area: R
                 let close_button_end = close_button_start + 3; // " ✕ " is 3 characters
                 let is_close_button = x >= close_button_start && x < close_button_end;
                 
-                // Debug info - this will help us understand what's happening
-                eprintln!("DEBUG: Tab {} click at x={}, tab_range=({}-{}), close_range=({}-{}), is_close={}", 
-                    i, x, tab_start_x, tab_end_x, close_button_start, close_button_end, is_close_button);
+                // Debug info is now handled through notifications in the calling code
                 
                 return Some((i, is_close_button));
             } else {

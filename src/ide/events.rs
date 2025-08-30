@@ -17,6 +17,7 @@ pub enum IdeEvent {
     FocusFileExplorer,
     FocusEditor,
     FocusChat,
+    FocusNotifications,
     CycleFocus,
     
     // Mode changes
@@ -171,6 +172,7 @@ impl EventHandler {
             KeyCode::Char('1') => Some(IdeEvent::FocusFileExplorer),
             KeyCode::Char('2') => Some(IdeEvent::FocusEditor),
             KeyCode::Char('3') => Some(IdeEvent::FocusChat),
+            KeyCode::Char('4') => Some(IdeEvent::FocusNotifications),
             _ => None,
         }
     }

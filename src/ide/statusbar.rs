@@ -45,6 +45,7 @@ impl StatusBar {
             FocusedPanel::FileExplorer => "FILES",
             FocusedPanel::Editor => "EDITOR",
             FocusedPanel::Chat => "CHAT",
+            FocusedPanel::Notifications => "NOTIFICATIONS",
         };
 
         // File information

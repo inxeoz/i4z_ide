@@ -1,7 +1,7 @@
 use crate::ide::app::AppMode;
 use anyhow::Result;
 use ratatui::{
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect, Alignment},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
@@ -451,26 +451,107 @@ impl Editor {
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, is_focused: bool, mode: AppMode) {
-        if let Some(tab) = self.get_current_tab_mut() {
-            // Calculate visible lines
-            let visible_lines = area.height.saturating_sub(2) as usize; // Account for borders
-            // Don't automatically ensure cursor visible - this interferes with manual scrolling
-            // Only call ensure_cursor_visible when cursor moves, not on every draw
+        // If we have open files, draw tabs and editor content within a single border
+        if self.has_open_files() {
+            self.draw_with_tabs(frame, area, is_focused, mode);
+        } else {
+            // No files open, draw welcome message
+            self.draw_welcome(frame, area, is_focused, mode);
+        }
+    }
 
-            let border_style = if is_focused {
-                match mode {
-                    AppMode::Insert => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                    AppMode::Normal => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                    AppMode::Agentic => Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
-                }
+    fn draw_with_tabs(&mut self, frame: &mut Frame, area: Rect, is_focused: bool, mode: AppMode) {
+        let border_style = if is_focused {
+            match mode {
+                AppMode::Insert => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                AppMode::Normal => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                AppMode::Agentic => Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            }
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        // Create the main editor block with border
+        let editor_block = Block::default()
+            .title(" 📝 Editor ")
+            .borders(Borders::ALL)
+            .border_style(border_style);
+
+        // Get the inner area of the block (inside the border)
+        let inner_area = editor_block.inner(area);
+
+        // Split the inner area: [Tabs] [Content]
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // Tab bar (no additional border needed)
+                Constraint::Min(5),    // Editor content
+            ])
+            .split(inner_area);
+
+        // Draw the main border first
+        frame.render_widget(editor_block, area);
+
+        // Draw tabs inside the border
+        self.draw_tabs_internal(frame, chunks[0], is_focused, mode);
+
+        // Draw editor content inside the border
+        self.draw_content_internal(frame, chunks[1], is_focused, mode);
+    }
+
+    fn draw_tabs_internal(&self, frame: &mut Frame, area: Rect, is_focused: bool, _mode: AppMode) {
+        let tabs = self.get_tab_info();
+        let active_tab = self.get_active_tab_index();
+
+        if tabs.is_empty() {
+            return;
+        }
+
+        let mut tab_spans = Vec::new();
+        
+        for (i, tab) in tabs.iter().enumerate() {
+            let is_active = i == active_tab;
+            let is_modified = tab.is_modified;
+
+            // Tab styling - simpler since we're inside the border
+            let (bg_color, fg_color) = if is_active && is_focused {
+                (Color::Cyan, Color::Black)
+            } else if is_active {
+                (Color::Blue, Color::White)
             } else {
-                Style::default().fg(Color::DarkGray)
+                (Color::Reset, Color::Gray)
             };
 
-            let title = format!(" {} {}", 
-                get_file_icon(&tab.file_name),
-                tab.file_name
-            );
+            let mut style = Style::default().bg(bg_color).fg(fg_color);
+            if is_active {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+
+            // Tab content
+            let modified_indicator = if is_modified { "●" } else { "" };
+            let tab_text = format!(" {}{} ", tab.file_name, modified_indicator);
+
+            tab_spans.push(Span::styled(tab_text, style));
+
+            // Tab separator
+            if i < tabs.len() - 1 {
+                tab_spans.push(Span::raw("│"));
+            }
+        }
+
+        // Add new tab button
+        tab_spans.push(Span::styled(" + ", Style::default().fg(Color::Gray)));
+
+        let tabs_line = Line::from(tab_spans);
+        let tabs_paragraph = Paragraph::new(tabs_line);
+
+        frame.render_widget(tabs_paragraph, area);
+    }
+
+    fn draw_content_internal(&mut self, frame: &mut Frame, area: Rect, is_focused: bool, _mode: AppMode) {
+        if let Some(tab) = self.get_current_tab_mut() {
+            // Calculate visible lines (no need to account for borders here)
+            let visible_lines = area.height as usize;
 
             // Create editor content with line numbers
             let mut content_lines = Vec::new();
@@ -497,21 +578,36 @@ impl Editor {
                 content_lines.push(Line::from(Span::styled(line_content, line_style)));
             }
 
-            // Show cursor position in insert mode
-            if is_focused && mode == AppMode::Insert {
-                // This is a simplified cursor representation
-                // In a real implementation, you'd want to show the actual cursor position
-            }
-
             let editor_content = Paragraph::new(content_lines)
-                .block(Block::default()
-                    .title(title)
-                    .borders(Borders::ALL)
-                    .border_style(border_style))
                 .style(Style::default().fg(Color::White));
 
             frame.render_widget(editor_content, area);
         }
+    }
+
+    fn draw_welcome(&self, frame: &mut Frame, area: Rect, is_focused: bool, _mode: AppMode) {
+        let border_style = if is_focused {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let welcome_text = vec![
+            Line::from(""),
+            Line::from(Span::styled("📝 No files open", Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+            Line::from(Span::styled("Press Ctrl+N to create a new file", Style::default().fg(Color::Yellow))),
+            Line::from(Span::styled("or select a file from the explorer", Style::default().fg(Color::Yellow))),
+        ];
+
+        let welcome = Paragraph::new(welcome_text)
+            .alignment(Alignment::Center)
+            .block(Block::default()
+                .title(" 📝 Editor ")
+                .borders(Borders::ALL)
+                .border_style(border_style));
+
+        frame.render_widget(welcome, area);
     }
 }
 

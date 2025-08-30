@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use arboard::{Clipboard, ImageData};
 use base64::{engine::general_purpose, Engine as _};
-use image::{ImageFormat, ImageOutputFormat};
+use image::ImageFormat;
 use std::io::Cursor;
 
 pub struct ClipboardManager {

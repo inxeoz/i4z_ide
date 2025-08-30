@@ -5,8 +5,8 @@ pub mod editor;
 pub mod statusbar;
 pub mod events;
 
-pub use app::IdeApp;
-pub use events::{IdeEvent, EventHandler};
+pub use app::{IdeApp, NotificationType};
+pub use events::EventHandler;
 
 use anyhow::Result;
 use crossterm::{
@@ -19,6 +19,11 @@ use std::io;
 use crate::config::Config;
 
 pub async fn run_ide(config: Config) -> Result<()> {
+    let app = IdeApp::new(config).await?;
+    run_ide_with_app(app).await
+}
+
+pub async fn run_ide_with_app(mut app: IdeApp) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -26,8 +31,6 @@ pub async fn run_ide(config: Config) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create IDE app
-    let mut app = IdeApp::new(config).await?;
     let mut event_handler = EventHandler::new();
 
     // Run the main loop

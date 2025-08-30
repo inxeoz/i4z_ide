@@ -38,6 +38,7 @@ impl NotificationPanel {
                     NotificationType::MouseClick => ("🖱️", Color::Yellow),
                     NotificationType::FileOperation => ("📄", Color::Green),
                     NotificationType::Info => ("ℹ️", Color::Blue),
+                    NotificationType::Debug => ("🐛", Color::Magenta),
                 };
 
                 // Format timestamp (show seconds)
